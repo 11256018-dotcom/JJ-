@@ -21,6 +21,7 @@ import { db, storage } from '../../../config/firebaseConfig';
 import { useAuth } from '../../../context/AuthContext';
 import {
     getMessages,
+    markAllAsRead,
     Message,
     sendMessage,
     subscribeToMessages,
@@ -87,9 +88,18 @@ export default function SpecificChatRoom() {
         }
 
         const initialMessages = await getMessages(chatId, 100);
+        console.log('[CHAT_DEBUG] room initialMessages', { chatId, currentUserId: user?.uid, messages: initialMessages });
         setMessages(initialMessages);
 
+        try {
+          await markAllAsRead(chatId);
+          console.log('[CHAT_DEBUG] room markAllAsRead triggered', { chatId, currentUserId: user?.uid });
+        } catch (error) {
+          console.error('[CHAT_ROOM] markAllAsRead failed:', error);
+        }
+
         unsubscribeRef.current = subscribeToMessages(chatId, (updatedMessages) => {
+          console.log('[CHAT_DEBUG] room received Firestore realtime data', { chatId, messages: updatedMessages });
           setMessages(updatedMessages);
           flatListRef.current?.scrollToEnd({ animated: true });
         });
@@ -237,6 +247,7 @@ export default function SpecificChatRoom() {
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => {
             const isMine = item.senderId === user?.uid;
+            const showReadStatus = isMine && (Boolean(item.isRead) || (Array.isArray(item.readBy) && item.readBy.includes(user?.uid || '')));
             return (
               <View
                 style={[
@@ -245,9 +256,12 @@ export default function SpecificChatRoom() {
                 ]}
               >
                 {isMine ? (
-                  <Text style={[styles.messageTime, styles.messageTimeRight]}> 
-                    {formatTime(item.createdAt || item.timestamp)}
-                  </Text>
+                  <View style={styles.messageMetaRow}>
+                    {showReadStatus ? <Text style={styles.readText}>已讀</Text> : null}
+                    <Text style={[styles.messageTime, styles.messageTimeRight]}>
+                      {formatTime(item.createdAt || item.timestamp)}
+                    </Text>
+                  </View>
                 ) : null}
 
                 <View
@@ -267,7 +281,7 @@ export default function SpecificChatRoom() {
                 </View>
 
                 {!isMine ? (
-                  <Text style={[styles.messageTime, styles.messageTimeLeft]}> 
+                  <Text style={[styles.messageTime, styles.messageTimeLeft]}>
                     {formatTime(item.createdAt || item.timestamp)}
                   </Text>
                 ) : null}

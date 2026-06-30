@@ -115,6 +115,11 @@ export default function ChatScreen() {
         // Load initial messages
         try {
           const initialMessages = await getMessages(cId, 50);
+          console.log('[CHAT_DEBUG] initialMessages', {
+            chatId: cId,
+            currentUserId: user?.uid,
+            messages: initialMessages,
+          });
           setMessages(initialMessages);
         } catch (e: any) {
           console.error('聊天室載入失敗（讀取 messages）:', e);
@@ -130,6 +135,11 @@ export default function ChatScreen() {
 
         // Subscribe to real-time updates
         const unsubscribe = subscribeToMessages(cId, (updatedMessages) => {
+          console.log('[CHAT_DEBUG] messages updated from subscription', {
+            chatId: cId,
+            currentUserId: user?.uid,
+            messages: updatedMessages,
+          });
           setMessages(updatedMessages);
           flatListRef.current?.scrollToEnd({ animated: true });
         });
@@ -170,6 +180,18 @@ export default function ChatScreen() {
 
   const renderMessage = ({ item }: { item: Message }) => {
     const isCurrentUser = item.senderId === user?.uid;
+    const hasReadStatus = Boolean(item.isRead) || (Array.isArray(item.readBy) && item.readBy.includes(user?.uid || ''));
+    const showReadStatus = isCurrentUser && hasReadStatus;
+
+    console.log('[CHAT_DEBUG] renderMessage', {
+      messageId: item.id,
+      senderId: item.senderId,
+      currentUserId: user?.uid,
+      readBy: item.readBy,
+      isRead: item.isRead,
+      hasReadStatus,
+      showReadStatus,
+    });
 
     return (
       <View
@@ -195,7 +217,7 @@ export default function ChatScreen() {
             {item.text}
           </Text>
           <View style={styles.messageMetaRow}>
-            {isCurrentUser && ((item.readBy && item.readBy.length > 1) || item.isRead) ? (
+            {showReadStatus ? (
               <Text style={styles.readText}>已讀</Text>
             ) : null}
             <Text style={[styles.messageTime, isCurrentUser && styles.messageTimeRight]}>

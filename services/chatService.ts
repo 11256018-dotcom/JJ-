@@ -45,6 +45,27 @@ export interface ChatPreview extends Chat {
   unreadCount?: number;
 }
 
+function normalizeMessage(docId: string, chatId: string, data: any): Message {
+  const readBy = Array.isArray(data?.readBy) ? data.readBy : [];
+  const isRead = data?.isRead ?? (readBy.length > 1);
+
+  console.log('[CHAT_DEBUG] normalizeMessage', {
+    id: docId,
+    senderId: data?.senderId,
+    readBy,
+    isRead,
+    raw: data,
+  });
+
+  return {
+    id: docId,
+    chatId,
+    ...data,
+    readBy,
+    isRead,
+  } as Message;
+}
+
 // Generate chat ID from two user IDs (always same order)
 export function generateChatId(uid1: string, uid2: string): string {
   const ids = [uid1, uid2].sort();
@@ -103,7 +124,7 @@ export async function sendMessage(
 
   try {
     const messagesRef = collection(db, 'chats', chatId, 'messages');
-    const messageDoc = await addDoc(messagesRef, {
+    const payload = {
       senderId: currentUser.uid,
       senderName: currentUser.displayName || 'Unknown',
       senderAvatar: currentUser.photoURL || '',
@@ -111,8 +132,14 @@ export async function sendMessage(
       timestamp: serverTimestamp(),
       createdAt: serverTimestamp(),
       readBy: [currentUser.uid],
-      isRead: true,
-    });
+      isRead: false,
+      status: 'sent',
+    };
+
+    console.log('[CHAT_DEBUG] sendMessage payload', { chatId, payload });
+
+    const messageDoc = await addDoc(messagesRef, payload);
+    console.log('[CHAT_DEBUG] sendMessage success', { chatId, messageId: messageDoc.id });
 
     // Update chat metadata
     await updateDoc(doc(db, 'chats', chatId), {
@@ -141,11 +168,7 @@ export async function getMessages(chatId: string, limitCount: number = 50): Prom
 
     const snapshot = await getDocs(q);
     return snapshot.docs
-      .map((doc) => ({
-        id: doc.id,
-        chatId,
-        ...doc.data(),
-      } as Message))
+      .map((doc) => normalizeMessage(doc.id, chatId, doc.data()))
       .reverse();
   } catch (error) {
     console.error('Error getting messages:', error);
@@ -163,14 +186,20 @@ export function subscribeToMessages(
     const q = query(messagesRef, orderBy('timestamp', 'asc'));
 
     return onSnapshot(q, (snapshot) => {
+      const rawMessages = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+      console.log('[CHAT_DEBUG] 收到 Firestore 實時資料:', { chatId, rawMessages });
+
       const messages: Message[] = [];
       snapshot.forEach((doc) => {
-        messages.push({
-          id: doc.id,
-          chatId,
-          ...doc.data(),
-        } as Message);
+        messages.push(normalizeMessage(doc.id, chatId, doc.data()));
       });
+
+      console.log('[CHAT_DEBUG] subscribeToMessages payload', {
+        chatId,
+        count: messages.length,
+        messages,
+      });
+
       callback(messages);
     });
   } catch (error) {
@@ -189,10 +218,13 @@ export async function markMessageAsRead(
 
   try {
     const messageRef = doc(db, 'chats', chatId, 'messages', messageId);
+    console.log('[CHAT_DEBUG] markMessageAsRead start', { chatId, messageId, currentUserId: currentUser.uid });
     await updateDoc(messageRef, {
       readBy: arrayUnion(currentUser.uid),
       isRead: true,
+      status: 'read',
     });
+    console.log('[CHAT_DEBUG] markMessageAsRead success', { chatId, messageId, currentUserId: currentUser.uid });
   } catch (error) {
     console.error('Error marking message as read:', error);
   }
@@ -206,23 +238,31 @@ export async function markAllAsRead(chatId: string): Promise<void> {
   try {
     const messagesRef = collection(db, 'chats', chatId, 'messages');
     const snapshot = await getDocs(messagesRef);
+
+    console.log('[CHAT_DEBUG] markAllAsRead start', { chatId, currentUserId: currentUser.uid, count: snapshot.size });
+
+    if (snapshot.empty) {
+      return;
+    }
+
     const batch = writeBatch(db);
 
     snapshot.forEach((docSnap) => {
       const data = docSnap.data();
-      const alreadyRead = data.readBy?.includes(currentUser.uid) || data.isRead === true;
+      const senderIsCurrentUser = data.senderId === currentUser.uid;
+      const alreadyRead = data.readBy?.includes(currentUser.uid) || data.isRead === true || senderIsCurrentUser;
 
       if (!alreadyRead) {
         batch.update(docSnap.ref, {
           readBy: arrayUnion(currentUser.uid),
           isRead: true,
+          status: 'read',
         });
       }
     });
 
-    if (snapshot.size > 0) {
-      await batch.commit();
-    }
+    await batch.commit();
+    console.log('[CHAT_DEBUG] markAllAsRead success', { chatId, currentUserId: currentUser.uid });
   } catch (error) {
     console.error('Error marking all as read:', error);
   }
